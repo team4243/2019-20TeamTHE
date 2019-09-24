@@ -1,5 +1,5 @@
 /**
- * Enable robot and slowly drive forward.
+ * Enable robot and slowly drive forward.rollers?
  * [1] If DS reports errors, adjust CAN IDs and firmware update.
  * [2] If motors are spinning incorrectly, first check gamepad.
  * [3] If motors are still spinning incorrectly, correct motor inverts.
@@ -20,6 +20,12 @@ public:
 	WPI_TalonSRX * _rghtFollower = new WPI_TalonSRX(2);
 	WPI_TalonSRX * _leftFront = new WPI_TalonSRX(6);
 	WPI_TalonSRX * _leftFollower = new WPI_TalonSRX(4);
+    frc::Spark feedrollerleft{0};
+    frc::Spark feedrollerright{1};
+    frc::Spark conveyorbottom{2};
+    frc::Spark conveyortop{3};
+    frc::Spark shooterrollerleft{4};
+    frc::Spark shooterrollerright{5};
 
 	DifferentialDrive * _diffDrive = new DifferentialDrive(*_leftFront,
 			*_rghtFront);
