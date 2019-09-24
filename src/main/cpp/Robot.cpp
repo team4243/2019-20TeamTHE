@@ -1,70 +1,438 @@
-/*----------------------------------------------------------------------------*/
-/* Copyright (c) 2017-2018 FIRST. All Rights Reserved.                        */
-/* Open Source Software - may be modified and shared by FRC teams. The code   */
-/* must be accompanied by the FIRST BSD license file in the root directory of */
-/* the project.                                                               */
-/*----------------------------------------------------------------------------*/
+/*************************************************************************************************/
+/**** Includes ****/
 
 #include "Robot.h"
-
+#include "frc/WPILib.h"
+//#include "frc/CameraServer.h"
+//#include "C:\FRC_2019\Workspace_2019\2019_Excelsior_Code\Robot_2019\build\tmp\expandedArchives\cameraserver-cpp-2019.3.1-headers.zip_992d6c67f4984f018ec363e9353431cb\CameraServer.h"
+#include "Excelsior_Classes.h"
 #include <iostream>
 
-#include <frc/smartdashboard/SmartDashboard.h>
+#include <Math.h>
 
-void Robot::RobotInit() {
-  m_chooser.SetDefaultOption(kAutoNameDefault, kAutoNameDefault);
-  m_chooser.AddOption(kAutoNameCustom, kAutoNameCustom);
-  frc::SmartDashboard::PutData("Auto Modes", &m_chooser);
+/**** !!!!!!! TUNING VARIABLES !!!!!!!  ****/
+/*************************************************************************************************/
+/**** !!!!!!! TUNING VARIABLES !!!!!!!  ****/
+
+// Joystick COM channels
+#define DRIVER_ONE_CHANNEL (0) // SWAP THESE CHANNELS IF TESTING JUST DRIVER TWO CONTROLS!
+#define DRIVER_TWO_CHANNEL (1) // SWAP THESE CHANNELS IF TESTING JUST DRIVER TWO CONTROLS!
+
+// Enabling Bits
+#define ENABLE_OMNI_DRIVE (true)
+#define ENABLE_PAYLOAD_LIFT (true)
+#define ENABLE_END_EFFECTOR (true)
+
+// Print operator control
+#define PRINT_CONTROL_VALUES (false)
+
+// Print encoder values for any ENABLED mechanisms
+#define PRINT_ENCODER_VALUES (true)
+
+// Deadband for Gamepad Triggers
+#define DEADBAND_TRIGGER (0.12)
+
+// Speed to hold the cargo when releasing
+#define CARGO_ROLLER_HOLDING_SPEED (-0.1)
+
+/*************************************************************************************************/
+/**** Control Logic Switchboard -- Omni Drive ****/
+
+// Drive logic -- Velocity Mode and Manual
+#define CTRL_DRIVE_LEFT_RIGHT (Driver_One.GetX())
+#define CTRL_DRIVE_FWD_BWD (-Driver_One.GetY())
+#define CTRL_DRIVE_ROTATE (Driver_One.GetRawAxis(AXIS_R3_X))
+#define CTRL_DRIVE_SWITCH_ALIGNING (Driver_One.GetRawButton(BUTTON_L1))
+
+/*************************************************************************************************/
+/**** Control Logic Switchboard -- Payload Lift ****/
+
+// Lift logic -- Position Mode -- Cargo
+#define CTRL_LIFT_POSITION_LOW_CARGO (Driver_Two.GetRawButton(BUTTON_CROSS) && Driver_Two.GetRawButton(BUTTON_L1))
+#define CTRL_LIFT_POSITION_MID_CARGO (Driver_Two.GetRawButton(BUTTON_CIRCLE) && Driver_Two.GetRawButton(BUTTON_L1))
+#define CTRL_LIFT_POSITION_HIGH_CARGO (Driver_Two.GetRawButton(BUTTON_TRIANGLE) && Driver_Two.GetRawButton(BUTTON_L1))
+
+// Lift logic -- Position Mode -- Hatch
+#define CTRL_LIFT_POSITION_LOW_HATCH (Driver_Two.GetRawButton(BUTTON_CROSS) && Driver_Two.GetRawButton(BUTTON_R1))
+#define CTRL_LIFT_POSITION_MID_HATCH (Driver_Two.GetRawButton(BUTTON_CIRCLE) && Driver_Two.GetRawButton(BUTTON_R1))
+#define CTRL_LIFT_POSITION_HIGH_HATCH (Driver_Two.GetRawButton(BUTTON_TRIANGLE) && Driver_Two.GetRawButton(BUTTON_R1))
+
+#define CTRL_LIFT_POSITION_TRAVEL (Driver_Two.GetRawButton(BUTTON_SQARE))
+
+// Lift logic -- Position Adjustment
+#define CTRL_LIFT_POSITION_STEP_UP (false)//(Driver_Two.GetPOV() == 0)
+#define CTRL_LIFT_POSITION_STEP_DOWN (false)//(Driver_Two.GetPOV() == 180)
+
+// Lift logic -- Manual
+#define CTRL_LIFT_UP_DOWN (-Driver_Two.GetY())
+#define CTRL_LIFT_SWITCH_MANUAL (Driver_Two.GetY() > DEADBAND_TRIGGER || Driver_Two.GetY() < -DEADBAND_TRIGGER)
+
+// Lift logic -- Encoder Zeroing for initial calibration
+#define CTRL_LIFT_ENCODER_ZERO (Driver_Two.GetRawButton(BUTTON_SHARE) && Driver_Two.GetRawButton(BUTTON_OPTIONS))
+
+/*************************************************************************************************/
+/**** Control Logic Switchboard -- End Effector ****/
+
+// Trigger values for Cargo Roller and Hatch Flower
+#define LEFT_TRIGGER_VALUE (Driver_Two.GetRawAxis(AXIS_L2))
+#define RIGHT_TRIGGER_VALUE (Driver_Two.GetRawAxis(AXIS_R2))
+
+// Cargo Roller logic -- Velocity Mode
+#define CTRL_ROLL_IN ((LEFT_TRIGGER_VALUE > DEADBAND_TRIGGER) && Driver_Two.GetRawButton(BUTTON_L1))
+#define CTRL_ROLL_OUT ((RIGHT_TRIGGER_VALUE > DEADBAND_TRIGGER) && Driver_Two.GetRawButton(BUTTON_L1))
+
+// Cargo Roller logic -- MANUAL
+#define CTRL_ROLL_IN_OUT (Driver_Two.GetX())
+#define CTRL_ROLL_SWITCH_MANUAL (true) //(Driver_Two.GetRawButton(BUTTON_R3))
+
+// Mechanical Lili-Pad Balloon logic
+#define CTRL_HATCH_IN ((LEFT_TRIGGER_VALUE > DEADBAND_TRIGGER) && Driver_Two.GetRawButton(BUTTON_R1))
+#define CTRL_HATCH_OUT ((RIGHT_TRIGGER_VALUE > DEADBAND_TRIGGER) && Driver_Two.GetRawButton(BUTTON_R1))
+
+// Camera Tilt logic
+#define CTRL_CAMERA_UP (Driver_One.GetRawButton(BUTTON_L2))
+#define CTRL_CAMERA_DOWN (Driver_One.GetRawButton(BUTTON_R2))
+
+/*************************************************************************************************/
+/**** Object Declarations and Global Variables ****/
+
+// Custom objects
+Excelsior_Omni_Drive Omni_Drive;
+Excelsior_Payload_Lift Payload_Lift;
+Excelsior_End_Effector End_Effector;
+
+// Joystick Controllers, in this case we use Gamepad's instead of traditional joysticks
+frc::Joystick Driver_One{DRIVER_ONE_CHANNEL};
+frc::Joystick Driver_Two{DRIVER_TWO_CHANNEL};
+
+// Camera
+//frc::CameraServer cameraServer{}
+
+// Operator must press and release button for Payload Lift position changes
+bool pressedLastFrame_autoLift = false;
+
+// Operator must release manual lift action button to stop motion after press-n-hold action
+bool pressedLastFrame_manualLift = false;
+
+// Operator must release manual roller action button to stop motion after press-n-hold action
+bool pressedLastFrame_cargoRollers = false;
+
+/*************************************************************************************************/
+/**** Teleop Periodic ****/
+
+void Robot::TeleopPeriodic()
+{
+    /************* OMNI DRIVE LOGIC ***************/
+    if (ENABLE_OMNI_DRIVE)
+    {
+        // Drive robot
+        if (PRINT_CONTROL_VALUES)
+        {
+            if (abs(CTRL_DRIVE_FWD_BWD) > DEADBAND_TRIGGER)
+            {
+                std::cout << "WARNING: "
+                          << "Forwards by" << CTRL_DRIVE_FWD_BWD << std::endl;
+            }
+            if (abs(CTRL_DRIVE_LEFT_RIGHT) > DEADBAND_TRIGGER)
+            {
+                std::cout << "WARNING: "
+                          << "Strafing by" << CTRL_DRIVE_LEFT_RIGHT << std::endl;
+            }
+            if (abs(CTRL_DRIVE_ROTATE) > DEADBAND_TRIGGER)
+            {
+                std::cout << "WARNING: "
+                          << "Rotating by" << CTRL_DRIVE_ROTATE << std::endl;
+            }
+        }
+
+        else
+            Omni_Drive.Omni_Drive_Action(CTRL_DRIVE_LEFT_RIGHT, CTRL_DRIVE_FWD_BWD, CTRL_DRIVE_ROTATE, CTRL_DRIVE_SWITCH_ALIGNING);
+    }
+
+    /************* PAYLOAD LIFT LOGIC ***************/
+    if (ENABLE_PAYLOAD_LIFT)
+    {
+        // Zero out the Lift Arm
+        if (CTRL_LIFT_ENCODER_ZERO)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "Enconders Zeroed"
+                          << "" << std::endl;
+            else
+                Payload_Lift.Zero_Encoder_Position();
+        }
+
+        // Set Lift Position -- Cargo LOW
+        else if (CTRL_LIFT_POSITION_LOW_CARGO)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "(C) Lowest Position Targetted by Arm -- Cargo"
+                          << "" << std::endl;
+            else
+                Payload_Lift.Payload_Lift_Action(Lowest_Cargo_Position); //, Driver_Two);
+        }
+
+        // Set Lift Position -- Hatch LOW
+        else if (CTRL_LIFT_POSITION_LOW_HATCH)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "(H) Lowest Position Targetted by Arm -- Hatch"
+                          << "" << std::endl;
+            else
+                Payload_Lift.Payload_Lift_Action(Lowest_Hatch_Position); //, Driver_Two);
+        }
+
+        // Set Lift Position -- Cargo MIDDLE
+        else if (CTRL_LIFT_POSITION_MID_CARGO)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "(C) Middle Position Targetted by Arm -- Cargo"
+                          << "" << std::endl;
+            else
+                Payload_Lift.Payload_Lift_Action(Middle_Cargo_Position); //, Driver_Two);
+        }
+
+        // Set Lift Position -- Hatch MIDDLE
+        else if (CTRL_LIFT_POSITION_MID_HATCH)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "(H) Middle Position Targetted by Arm -- Hatch"
+                          << "" << std::endl;
+            else
+                Payload_Lift.Payload_Lift_Action(Middle_Hatch_Position); //, Driver_Two);
+        }
+
+        // Set Lift Position -- Cargo HIGH
+        else if (CTRL_LIFT_POSITION_HIGH_CARGO)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "(C) Highest Position Targetted by Arm -- Cargo"
+                          << "" << std::endl;
+            else
+                Payload_Lift.Payload_Lift_Action(Highest_Cargo_Position); //, Driver_Two);
+        }
+
+        // Set Lift Position -- Hatch HIGH
+        else if (CTRL_LIFT_POSITION_HIGH_HATCH)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "(H) Highest Position Targetted by Arm -- Hatch"
+                          << "" << std::endl;
+            else
+                Payload_Lift.Payload_Lift_Action(Highest_Hatch_Position); //, Driver_Two);
+        }
+
+        // Set Lift Position -- Move to next highest lift position
+        else if (CTRL_LIFT_POSITION_STEP_UP)
+        {
+            // Intentionally separated, don't combine with CTRL_LIFT_POSITION_STEP_UP conditional
+            if (!pressedLastFrame_autoLift)
+            {
+                pressedLastFrame_autoLift = true;
+
+                if (PRINT_CONTROL_VALUES)
+                    std::cout << "WARNING: "
+                              << "Next Position Targetted by Arm"
+                              << "" << std::endl;
+                else
+                    Payload_Lift.Payload_Lift_Step(true); //, Driver_Two);
+            }
+        }
+
+        // Set Lift Position -- Move to next lowest lift position
+        else if (CTRL_LIFT_POSITION_STEP_DOWN)
+        {
+            if (!pressedLastFrame_autoLift)
+            {
+                pressedLastFrame_autoLift = true;
+
+                if (PRINT_CONTROL_VALUES)
+                    std::cout << "WARNING: "
+                              << "Previous Position Targetted by Arm"
+                              << "" << std::endl;
+                else
+                    Payload_Lift.Payload_Lift_Step(false); //, Driver_Two);
+            }
+        }
+
+        // Set Lift Position -- MANUAL
+        else if (CTRL_LIFT_SWITCH_MANUAL)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "(M) Moving Arm by " << CTRL_LIFT_UP_DOWN << std::endl;
+            else
+                Payload_Lift.Payload_Lift_Manual(CTRL_LIFT_UP_DOWN);
+
+            pressedLastFrame_manualLift = true;
+        }
+
+        // To prevent multiple presses of lift position adjustment
+        else
+        {
+            pressedLastFrame_autoLift = false;
+        }
+
+        // Stop the Lift if operator releases manual switch
+        if (!CTRL_LIFT_SWITCH_MANUAL && pressedLastFrame_manualLift)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "(M) Stopping Arm"
+                          << "" << std::endl;
+
+            pressedLastFrame_manualLift = false;
+        }
+    }
+
+    /************* END EFFECTOR LOGIC ***************/
+    if (ENABLE_END_EFFECTOR)
+    {
+        // Cargo Rollers -- Manual Control
+        // if (CTRL_ROLL_SWITCH_MANUAL)
+        // {
+        //     pressedLastFrame_cargoRollers = true;
+
+        //     if (PRINT_CONTROL_VALUES)
+        //         std::cout << "WARNING: "
+        //                   << "[M] Rolling Cargo Ball by " << CTRL_ROLL_IN_OUT << std::endl;
+        //     else
+        //         End_Effector.Cargo_Roller_Manual(CTRL_ROLL_IN_OUT);
+        // }
+
+        // // Check if the Manual Cargo Roller switch has been released
+        // else if (!CTRL_ROLL_SWITCH_MANUAL && pressedLastFrame_cargoRollers)
+        // {
+        //     pressedLastFrame_cargoRollers = false;
+
+        //     if (PRINT_CONTROL_VALUES)
+        //         std::cout << "WARNING: "
+        //                   << "[M] Stopping Rollers" << std::endl;
+        //     else
+        //         End_Effector.Cargo_Roller_Manual(0);
+        // }
+
+        // Cargo Rollers -- Velocity Control
+        if (CTRL_ROLL_IN)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "Swallowing Cargo Ball" << std::endl;
+            else if (!pressedLastFrame_cargoRollers)
+                End_Effector.Cargo_Roller_Action(true, LEFT_TRIGGER_VALUE);
+        }
+
+        else if (CTRL_ROLL_OUT)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "Spitting Cargo Ball" << std::endl;
+            else if (!pressedLastFrame_cargoRollers)
+                End_Effector.Cargo_Roller_Action(false, RIGHT_TRIGGER_VALUE);
+        }
+
+        // Hatch Flower
+        else if (CTRL_HATCH_IN)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "Contracting Mechanical Lili-Pad Ballon" << std::endl;
+            else
+                End_Effector.Hatch_Flower_Action(true);
+        }
+
+        else if (CTRL_HATCH_OUT)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "Extending Mechanical Lili-Pad Balloon" << std::endl;
+            else
+                End_Effector.Hatch_Flower_Action(false);
+        }
+
+        else
+        {
+            if (!PRINT_CONTROL_VALUES)
+                End_Effector.Cargo_Roller_Action(true, CARGO_ROLLER_HOLDING_SPEED);
+
+            pressedLastFrame_cargoRollers = false;
+        }
+
+        // Camera Tilt
+        if (CTRL_CAMERA_UP)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "Upwards Camera Movement" << std::endl;
+            else
+                End_Effector.Camera_Tilt_Action(true);
+        }
+
+        else if (CTRL_CAMERA_DOWN)
+        {
+            if (PRINT_CONTROL_VALUES)
+                std::cout << "WARNING: "
+                          << "Downwards Camera Movement" << std::endl;
+            else
+                End_Effector.Camera_Tilt_Action(false);
+        }
+    }
 }
 
-/**
- * This function is called every robot packet, no matter the mode. Use
- * this for items like diagnostics that you want ran during disabled,
- * autonomous, teleoperated and test.
- *
- * <p> This runs after the mode specific periodic functions, but before
- * LiveWindow and SmartDashboard integrated updating.
- */
+/*************************************************************************************************/
+/**** Robot Initialization ****/
+
+void Robot::RobotInit()
+{
+    if (ENABLE_OMNI_DRIVE)
+        Omni_Drive.Configure_Omni_Drive();
+
+    if (ENABLE_PAYLOAD_LIFT)
+    {
+        Payload_Lift.Configure_Payload_Lift();
+
+        if (PRINT_CONTROL_VALUES)
+            std::cout << "WARNING: "
+                      << "Enconders Zeroed"
+                      << "" << std::endl;
+        else
+            Payload_Lift.Zero_Encoder_Position();
+    }
+
+    if (ENABLE_END_EFFECTOR)
+        End_Effector.Configure_End_Effector();
+
+    // Camera
+//    cameraServer.GetInstance().StartAutomaticCapture();
+}
+
+/*************************************************************************************************/
+/**** Misc Required Functions ****/
+
 void Robot::RobotPeriodic() {}
-
-/**
- * This autonomous (along with the chooser code above) shows how to select
- * between different autonomous modes using the dashboard. The sendable chooser
- * code works with the Java SmartDashboard. If you prefer the LabVIEW Dashboard,
- * remove all of the chooser code and uncomment the GetString line to get the
- * auto name from the text box below the Gyro.
- *
- * You can add additional auto modes by adding additional comparisons to the
- * if-else structure below with additional strings. If using the SendableChooser
- * make sure to add them to the chooser code above as well.
- */
-void Robot::AutonomousInit() {
-  m_autoSelected = m_chooser.GetSelected();
-  // m_autoSelected = SmartDashboard::GetString("Auto Selector",
-  //     kAutoNameDefault);
-  std::cout << "Auto selected: " << m_autoSelected << std::endl;
-
-  if (m_autoSelected == kAutoNameCustom) {
-    // Custom Auto goes here
-  } else {
-    // Default Auto goes here
-  }
+void Robot::TestPeriodic() {}
+void Robot::AutonomousInit() {}
+void Robot::AutonomousPeriodic()
+{
+    TeleopPeriodic();
 }
-
-void Robot::AutonomousPeriodic() {
-  if (m_autoSelected == kAutoNameCustom) {
-    // Custom Auto goes here
-  } else {
-    // Default Auto goes here
-  }
-}
-
 void Robot::TeleopInit() {}
 
-void Robot::TeleopPeriodic() {}
-
-void Robot::TestPeriodic() {}
+/*************************************************************************************************/
+/**** Start Robot -- Main() ****/
 
 #ifndef RUNNING_FRC_TESTS
-int main() { return frc::StartRobot<Robot>(); }
+
+int main()
+{
+    return frc::StartRobot<Robot>();
+}
+
 #endif
