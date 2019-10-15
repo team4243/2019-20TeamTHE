@@ -13,6 +13,7 @@
 
 using namespace frc;
 
+
 class Robot: public TimedRobot {
 public:
 	/* ------ [1] Update CAN Device IDs and switch to WPI_VictorSPX where necessary ------*/
@@ -84,6 +85,7 @@ public:
 		_rghtFollower->ConfigFactoryDefault();
 		_leftFront->ConfigFactoryDefault();
 		_leftFollower->ConfigFactoryDefault();
+		cout<<"Factory default values have been initialized"<<endl;
 
 		/* set up followers */
 		_rghtFollower->Follow(*_rghtFront);
